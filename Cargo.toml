@@ -1,6 +1,6 @@
 [package]
 name = "wasm-ws"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A convenience library for using websockets in WASM"
 authors = ["Yuki Kishimoto <yukikishimoto@protonmail.com>", "Naja Melan <najamelan@autistici.org>"]
