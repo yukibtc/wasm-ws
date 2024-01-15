@@ -17,7 +17,7 @@ use futures::{ready, FutureExt, StreamExt};
 use pharos::{Filter, Observable, SharedPharos};
 use send_wrapper::SendWrapper;
 use wasm_bindgen::closure::Closure;
-use wasm_bindgen::{JsCast, UnwrapThrowExt};
+use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{CloseEvent as JsCloseEvt, WebSocket, *};
 
@@ -156,13 +156,10 @@ impl WsStream {
     }
 
     /// Verify the [WsState] of the connection.
-    //
-    pub fn ready_state(&self) -> WsState {
+    pub fn ready_state(&self) -> Result<WsState, WsErr> {
         self.ws
             .ready_state()
             .try_into()
-            // This can't throw unless the browser gives us an invalid ready state
-            .expect_throw("Convert ready state from browser API")
     }
 
     /// Access the wrapped [web_sys::WebSocket](https://docs.rs/web-sys/0.3.25/web_sys/struct.WebSocket.html) directly.
@@ -197,18 +194,20 @@ impl Drop for WsStream {
     //
     fn drop(&mut self) {
         match self.ready_state() {
-            WsState::Closing | WsState::Closed => {}
-
-            _ => {
+            Ok(WsState::Closing) | Ok(WsState::Closed) => {}
+            Ok(WsState::Open) => {
                 // This can't fail. Only exceptions are related to invalid
                 // close codes and reason strings to long.
-                //
-                self.ws.close().expect("WsStream::drop - close ws socket");
+                let _ = self.ws.close();
 
                 // Notify Observers. This event is not emitted by the websocket API.
-                //
                 notify(self.pharos.clone(), WsEvent::Closing)
             }
+            Ok(WsState::Connecting) => {
+                // Notify Observers. This event is not emitted by the websocket API.
+                notify(self.pharos.clone(), WsEvent::Closing)
+            }
+            Err(_) => {}
         }
 
         self.ws.set_onmessage(None);
@@ -233,7 +232,7 @@ impl Stream for WsStream {
             *self.waker.borrow_mut() = Some(cx.waker().clone());
 
             match self.ready_state() {
-                WsState::Open | WsState::Connecting => Poll::Pending,
+                Ok(WsState::Open) | Ok(WsState::Connecting) => Poll::Pending,
                 _ => None.into(),
             }
         }
@@ -250,20 +249,19 @@ impl Sink<WsMessage> for WsStream {
     // Web API does not really seem to let us check for readiness, other than the connection state.
     //
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match self.ready_state() {
+        match self.ready_state()? {
             WsState::Connecting => {
                 *self.sink_waker.borrow_mut() = Some(cx.waker().clone());
 
                 Poll::Pending
             }
-
             WsState::Open => Ok(()).into(),
             _ => Err(WsErr::ConnectionNotOpen).into(),
         }
     }
 
     fn start_send(self: Pin<&mut Self>, item: WsMessage) -> Result<(), Self::Error> {
-        match self.ready_state() {
+        match self.ready_state()? {
             WsState::Open => {
                 // The send method can return 2 errors:
                 // - unpaired surrogates in UTF (we shouldn't get those in rust strings)
@@ -298,28 +296,20 @@ impl Sink<WsMessage> for WsStream {
     // TODO: find a simpler implementation, notably this needs to spawn a future.
     //       this can be done by creating a custom future. If we are going to implement
     //       events with pharos, that's probably a good time to re-evaluate this.
-    //
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let state = self.ready_state();
+        let state = self.ready_state()?;
 
         // First close the inner connection
-        //
-        if state == WsState::Connecting || state == WsState::Open {
-            // Can't fail
-            //
-            self.ws.close().unwrap_throw();
-
+        if state == WsState::Open {
+            let _ = self.ws.close();
             notify(self.pharos.clone(), WsEvent::Closing);
         }
 
         // Check whether it's closed
-        //
         match state {
             WsState::Closed => Ok(()).into(),
-
             _ => {
                 // Create a future that will resolve with the close event, so we can poll it.
-                //
                 if self.closer.is_none() {
                     let mut ph = self.pharos.clone();
 
@@ -336,7 +326,9 @@ impl Sink<WsMessage> for WsStream {
                     self.closer = Some(SendWrapper::new(closer.boxed()));
                 }
 
-                ready!(self.closer.as_mut().unwrap().as_mut().poll(cx));
+                if let Some(c) = self.closer.as_mut() {
+                    ready!(c.as_mut().poll(cx));
+                }
 
                 Ok(()).into()
             }

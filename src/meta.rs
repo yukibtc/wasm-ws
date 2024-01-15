@@ -37,23 +37,6 @@ impl WsMeta {
 
     /// Connect to the server. The future will resolve when the connection has been established with a successful WebSocket
     /// handshake.
-    ///
-    /// This returns both a [WsMeta] (allow manipulating and requesting meta data for the connection) and
-    /// a [WsStream] (`Stream`/`Sink` over [WsMessage](crate::WsMessage)). [WsStream] can be wrapped to obtain
-    /// `AsyncRead`/`AsyncWrite`/`AsyncBufRead` with [WsStream::into_io].
-    ///
-    /// ## Errors
-    ///
-    /// Browsers will forbid making websocket connections to certain ports. See this [Stack Overflow question](https://stackoverflow.com/questions/4313403/why-do-browsers-block-some-ports/4314070).
-    /// `connect` will return a [WsErr::ConnectionFailed] as it is indistinguishable from other connection failures.
-    ///
-    /// If the URL is invalid, a [WsErr::InvalidUrl] is returned. See the [HTML Living Standard](https://html.spec.whatwg.org/multipage/web-sockets.html#dom-websocket) for more information.
-    ///
-    /// When the connection fails (server port not open, wrong ip, wss:// on ws:// server, ... See the [HTML Living Standard](https://html.spec.whatwg.org/multipage/web-sockets.html#dom-websocket)
-    /// for details on all failure possibilities), a [WsErr::ConnectionFailed] is returned.
-    ///
-    /// **Note**: Sending protocols to a server that doesn't support them will make the connection fail.
-    //
     pub async fn connect(url: impl AsRef<str>) -> Result<(Self, WsStream), WsErr> {
         let ws = match WebSocket::new(url.as_ref()) {
             Ok(ws) => SendWrapper::new(Rc::new(ws)),
@@ -131,7 +114,11 @@ impl WsMeta {
                     self.ws.set_onopen(None);
                     self.ws.set_onclose(None);
                     self.ws.set_onerror(None);
-                    self.ws.close().unwrap_throw(); // cannot throw without code and reason.
+
+                    // Check if connection is `OPEN`. Will cause a panic if is not `open`
+                    if let Ok(WsState::Open) = self.ws.ready_state().try_into() {
+                        let _ = self.ws.close();
+                    }
 
                     println!(
                         "WsMeta::connect future was dropped while connecting to: {}.",
@@ -184,21 +171,18 @@ impl WsMeta {
 
     /// Close the socket. The future will resolve once the socket's state has become `WsState::CLOSED`.
     /// See: [MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/close)
-    //
     pub async fn close(&self) -> Result<CloseEvent, WsErr> {
         match self.ready_state() {
             WsState::Closed => return Err(WsErr::ConnectionNotOpen),
             WsState::Closing => {}
-
-            _ => {
-                // This can not throw normally, because the only errors the API can return is if we use a code or
-                // a reason string, which we don't.
-                // See [MDN](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/close#Exceptions_thrown).
-                //
-                self.ws.close().unwrap_throw();
+            WsState::Open => {
+                let _ = self.ws.close();
 
                 // Notify Observers
-                //
+                notify(self.pharos.clone(), WsEvent::Closing)
+            }
+            WsState::Connecting => {
+                // Notify Observers
                 notify(self.pharos.clone(), WsEvent::Closing)
             }
         }

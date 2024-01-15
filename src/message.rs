@@ -21,7 +21,6 @@ pub enum WsMessage {
 /// This will convert the JavaScript event into a WsMessage. Note that this
 /// will only work if the connection is set to use the binary type ArrayBuffer.
 /// On binary type Blob, this will panic.
-//
 impl TryFrom<MessageEvent> for WsMessage {
     type Error = WsErr;
 
