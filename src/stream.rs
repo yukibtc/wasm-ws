@@ -157,9 +157,7 @@ impl WsStream {
 
     /// Verify the [WsState] of the connection.
     pub fn ready_state(&self) -> Result<WsState, WsErr> {
-        self.ws
-            .ready_state()
-            .try_into()
+        self.ws.ready_state().try_into()
     }
 
     /// Access the wrapped [web_sys::WebSocket](https://docs.rs/web-sys/0.3.25/web_sys/struct.WebSocket.html) directly.

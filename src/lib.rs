@@ -15,13 +15,13 @@ mod state;
 mod stream;
 mod stream_io;
 
+pub use self::error::WsErr;
 pub use self::event::{CloseEvent, WsEvent};
 pub use self::message::WsMessage;
 pub use self::meta::WsMeta as WebSocket;
 pub use self::state::WsState;
 pub use self::stream::WsStream;
 pub use self::stream_io::WsStreamIo;
-pub use error::WsErr;
 
 /// Helper function to reduce code bloat
 pub(crate) fn notify(pharos: SharedPharos<WsEvent>, evt: WsEvent) {
