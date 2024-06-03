@@ -18,6 +18,24 @@ pub enum WsMessage {
     Binary(Vec<u8>),
 }
 
+impl WsMessage {
+    /// Get the length of the WebSocket message.
+    #[inline]
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Text(string) => string.len(),
+            Self::Binary(data) => data.len(),
+        }
+    }
+
+    /// Returns true if the WebSocket message has no content.
+    /// For example, if the other side of the connection sent an empty string.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 /// This will convert the JavaScript event into a WsMessage. Note that this
 /// will only work if the connection is set to use the binary type ArrayBuffer.
 /// On binary type Blob, this will panic.
