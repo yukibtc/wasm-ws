@@ -216,7 +216,9 @@ impl Drop for WsStream {
 }
 
 impl Stream for WsStream {
-    type Item = WsMessage;
+    type Item = Result<WsMessage, WsErr>;
+
+    // Using `Result<T, E>` to keep same format of `tungstenite` code
 
     // Currently requires an unfortunate copy from Js memory to WASM memory. Hopefully one
     // day we will be able to receive the MessageEvt directly in WASM.
@@ -233,10 +235,9 @@ impl Stream for WsStream {
                 Ok(WsState::Open) | Ok(WsState::Connecting) => Poll::Pending,
                 _ => None.into(),
             }
-        }
-        // As long as there is things in the queue, just keep reading
-        else {
-            self.queue.borrow_mut().pop_front().into()
+        } else {
+            // As long as there is things in the queue, just keep reading
+            self.queue.borrow_mut().pop_front().map(Ok).into()
         }
     }
 }

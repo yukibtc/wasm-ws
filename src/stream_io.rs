@@ -3,6 +3,7 @@
 // Distributed under the MIT software license
 
 use std::io;
+use std::io::ErrorKind;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -34,9 +35,12 @@ impl Stream for WsStreamIo {
     type Item = Result<Vec<u8>, io::Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.inner)
-            .poll_next(cx)
-            .map(|opt| opt.map(|msg| Ok(msg.into())))
+        Pin::new(&mut self.inner).poll_next(cx).map(|opt| {
+            opt.map(|msg| {
+                msg.map(|m| m.into())
+                    .map_err(|e| io::Error::new(ErrorKind::Other, e))
+            })
+        })
     }
 }
 
