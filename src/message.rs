@@ -2,6 +2,8 @@
 // Copyright (c) 2023-2024 Yuki Kishimoto
 // Distributed under the MIT software license
 
+use core::{fmt, str};
+
 use js_sys::{ArrayBuffer, Uint8Array};
 use wasm_bindgen::JsCast;
 use web_sys::{Blob, MessageEvent};
@@ -40,6 +42,15 @@ impl WsMessage {
         match self {
             Self::Text(string) => string.into_bytes(),
             Self::Binary(data) => data,
+        }
+    }
+
+    /// Attempt to get a &str from the WebSocket message,
+    /// this will try to convert binary data to utf8.
+    pub fn to_text(&self) -> Result<&str, WsErr> {
+        match self {
+            Self::Text(string) => Ok(string),
+            Self::Binary(data) => Ok(str::from_utf8(data)?),
         }
     }
 }
@@ -109,6 +120,16 @@ impl AsRef<[u8]> for WsMessage {
         match self {
             WsMessage::Text(string) => string.as_ref(),
             WsMessage::Binary(vec) => vec.as_ref(),
+        }
+    }
+}
+
+impl fmt::Display for WsMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Ok(string) = self.to_text() {
+            write!(f, "{string}")
+        } else {
+            write!(f, "Binary Data<length={}>", self.len())
         }
     }
 }

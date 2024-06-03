@@ -2,6 +2,8 @@
 // Copyright (c) 2023-2024 Yuki Kishimoto
 // Distributed under the MIT software license
 
+use core::str::Utf8Error;
+
 use thiserror::Error;
 
 use crate::CloseEvent;
@@ -11,6 +13,10 @@ use crate::CloseEvent;
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WsErr {
+    /// UTF-8 error
+    #[error(transparent)]
+    Utf8(#[from] Utf8Error),
+
     /// Invalid input to [WsState::try_from( u16 )](crate::WsState).
     //
     #[error("Invalid input to conversion to WsReadyState: {supplied}")]
