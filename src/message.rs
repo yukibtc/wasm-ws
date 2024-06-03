@@ -34,6 +34,14 @@ impl WsMessage {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Consume the message and return it as binary data.
+    pub fn into_data(self) -> Vec<u8> {
+        match self {
+            Self::Text(string) => string.into_bytes(),
+            Self::Binary(data) => data,
+        }
+    }
 }
 
 /// This will convert the JavaScript event into a WsMessage. Note that this
