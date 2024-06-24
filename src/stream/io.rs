@@ -2,30 +2,26 @@
 // Copyright (c) 2023-2024 Yuki Kishimoto
 // Distributed under the MIT software license
 
-use std::io;
-use std::io::ErrorKind;
+use std::io::{self, ErrorKind};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::prelude::{Sink, Stream};
 
-use crate::{WsErr, WsStream};
+use crate::{Error, WsStream};
 
 /// A wrapper around WsStream that converts errors into io::Error so that it can be
 /// used for io (like `AsyncRead`/`AsyncWrite`).
 ///
 /// You shouldn't need to use this manually. It is passed to [`IoStream`] when calling
 /// [`WsStream::into_io`].
-//
 #[derive(Debug)]
-//
 pub struct WsStreamIo {
     inner: WsStream,
 }
 
 impl WsStreamIo {
     /// Create a new WsStreamIo.
-    //
     pub fn new(inner: WsStream) -> Self {
         Self { inner }
     }
@@ -72,14 +68,14 @@ impl Sink<Vec<u8>> for WsStreamIo {
     }
 }
 
-fn convert_res_tuple(res: Result<(), WsErr>) -> Result<(), io::Error> {
+fn convert_res_tuple(res: Result<(), Error>) -> Result<(), io::Error> {
     res.map_err(convert_err)
 }
 
-fn convert_err(err: WsErr) -> io::Error {
+fn convert_err(err: Error) -> io::Error {
     match err {
-        WsErr::ConnectionNotOpen => io::Error::from(io::ErrorKind::NotConnected),
+        Error::ConnectionNotOpen => io::Error::from(ErrorKind::NotConnected),
         // This shouldn't happen, so panic for early detection.
-        _ => io::Error::from(io::ErrorKind::Other),
+        _ => io::Error::from(ErrorKind::Other),
     }
 }

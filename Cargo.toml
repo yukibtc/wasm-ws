@@ -12,11 +12,8 @@ categories = ["asynchronous", "network-programming", "api-bindings", "wasm", "we
 keywords = ["wasm", "websocket", "tokio", "stream", "async"]
 
 [dependencies]
-async_io_stream = { version = "0.3", features = ["map_pharos"] }
-futures = { version = "0.3", default-features = false }
+futures = { version = "0.3", default-features = false, features = ["std"] }
 js-sys = "0.3"
-pharos = "0.5"
-send_wrapper = "0.6"
 thiserror = "1.0"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

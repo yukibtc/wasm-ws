@@ -4,24 +4,23 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
-use async_io_stream::IoStream;
 use futures::prelude::{Sink, Stream};
 use futures::{ready, FutureExt, StreamExt};
-use pharos::{Filter, Observable, SharedPharos};
-use send_wrapper::SendWrapper;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{CloseEvent as JsCloseEvt, WebSocket, *};
 
-use crate::{notify, WsErr, WsEvent, WsMessage, WsState, WsStreamIo};
+pub mod io;
+
+use crate::pharos::{Filter, Observable, SharedPharos};
+use crate::{notify, Error, WsEvent, WsMessage, WsState};
 
 /// A futures 0.3 Sink/Stream of [WsMessage]. Created with [WsMeta::connect](crate::WsMeta::connect).
 ///
@@ -43,55 +42,50 @@ use crate::{notify, WsErr, WsEvent, WsMessage, WsState, WsStreamIo};
 /// See the [integration tests](https://github.com/najamelan/ws_stream_wasm/blob/release/tests/futures_codec.rs)
 /// if you need an example.
 pub struct WsStream {
-    ws: SendWrapper<Rc<WebSocket>>,
+    ws: Arc<WebSocket>,
 
     // The queue of received messages
-    queue: SendWrapper<Rc<RefCell<VecDeque<WsMessage>>>>,
+    queue: Arc<RefCell<VecDeque<WsMessage>>>,
 
     // Last waker of task that wants to read incoming messages to be woken up on a new message
-    waker: SendWrapper<Rc<RefCell<Option<Waker>>>>,
+    waker: Arc<RefCell<Option<Waker>>>,
 
     // Last waker of task that wants to write to the Sink
-    sink_waker: SendWrapper<Rc<RefCell<Option<Waker>>>>,
+    sink_waker: Arc<RefCell<Option<Waker>>>,
 
     // A pointer to the pharos of WsMeta for when we need to listen to events
     pharos: SharedPharos<WsEvent>,
 
     // The callback closures.
-    _on_open: SendWrapper<Closure<dyn FnMut()>>,
-    _on_error: SendWrapper<Closure<dyn FnMut()>>,
-    _on_close: SendWrapper<Closure<dyn FnMut(JsCloseEvt)>>,
-    _on_mesg: SendWrapper<Closure<dyn FnMut(MessageEvent)>>,
+    _on_open: Arc<Closure<dyn FnMut()>>,
+    _on_error: Arc<Closure<dyn FnMut()>>,
+    _on_close: Arc<Closure<dyn FnMut(JsCloseEvt)>>,
+    _on_msg: Arc<Closure<dyn FnMut(MessageEvent)>>,
 
     // This allows us to store a future to poll when Sink::poll_close is called
-    closer: Option<SendWrapper<Pin<Box<dyn Future<Output = ()> + Send>>>>,
+    closer: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
 }
 
 impl WsStream {
     /// Create a new WsStream.
-    //
     pub(crate) fn new(
-        ws: SendWrapper<Rc<WebSocket>>,
+        ws: Arc<WebSocket>,
         pharos: SharedPharos<WsEvent>,
-        on_open: SendWrapper<Closure<dyn FnMut()>>,
-        on_error: SendWrapper<Closure<dyn FnMut()>>,
-        on_close: SendWrapper<Closure<dyn FnMut(JsCloseEvt)>>,
+        on_open: Arc<Closure<dyn FnMut()>>,
+        on_error: Arc<Closure<dyn FnMut()>>,
+        on_close: Arc<Closure<dyn FnMut(JsCloseEvt)>>,
     ) -> Self {
-        let waker: SendWrapper<Rc<RefCell<Option<Waker>>>> =
-            SendWrapper::new(Rc::new(RefCell::new(None)));
-        let sink_waker: SendWrapper<Rc<RefCell<Option<Waker>>>> =
-            SendWrapper::new(Rc::new(RefCell::new(None)));
+        let waker: Arc<RefCell<Option<Waker>>> = Arc::new(RefCell::new(None));
+        let sink_waker: Arc<RefCell<Option<Waker>>> = Arc::new(RefCell::new(None));
 
-        let queue = SendWrapper::new(Rc::new(RefCell::new(VecDeque::new())));
+        let queue = Arc::new(RefCell::new(VecDeque::new()));
         let q2 = queue.clone();
         let w2 = waker.clone();
         let ph2 = pharos.clone();
 
         // Send the incoming ws messages to the WsMeta object
-        //
         #[allow(trivial_casts)]
-        //
-        let on_mesg = Closure::wrap(Box::new(move |msg_evt: MessageEvent| {
+        let on_msg = Closure::wrap(Box::new(move |msg_evt: MessageEvent| {
             match WsMessage::try_from(msg_evt) {
                 Ok(msg) => q2.borrow_mut().push_back(msg),
                 Err(err) => notify(ph2.clone(), WsEvent::WsErr(err)),
@@ -103,12 +97,10 @@ impl WsStream {
         }) as Box<dyn FnMut(MessageEvent)>);
 
         // Install callback
-        //
-        ws.set_onmessage(Some(on_mesg.as_ref().unchecked_ref()));
+        ws.set_onmessage(Some(on_msg.as_ref().unchecked_ref()));
 
         // When the connection closes, we need to verify if there are any tasks
         // waiting on poll_next. We need to wake them up.
-        //
         let ph = pharos.clone();
         let wake = waker.clone();
         let swake = sink_waker.clone();
@@ -117,7 +109,6 @@ impl WsStream {
             let mut rx;
 
             // Scope to avoid borrowing across await point.
-            //
             {
                 match ph
                     .observe_shared(Filter::Pointer(WsEvent::is_closed).into())
@@ -148,7 +139,7 @@ impl WsStream {
             sink_waker,
             pharos,
             closer: None,
-            _on_mesg: SendWrapper::new(on_mesg),
+            _on_msg: Arc::new(on_msg),
             _on_open: on_open,
             _on_error: on_error,
             _on_close: on_close,
@@ -156,7 +147,7 @@ impl WsStream {
     }
 
     /// Verify the [WsState] of the connection.
-    pub fn ready_state(&self) -> Result<WsState, WsErr> {
+    pub fn ready_state(&self) -> Result<WsState, Error> {
         self.ws.ready_state().try_into()
     }
 
@@ -171,13 +162,6 @@ impl WsStream {
     //
     pub fn wrapped(&self) -> &WebSocket {
         &self.ws
-    }
-
-    /// Wrap this object in [`IoStream`]. `IoStream` implements `AsyncRead`/`AsyncWrite`/`AsyncBufRead`.
-    /// **Beware**: that this will transparenty include text messages as bytes.
-    //
-    pub fn into_io(self) -> IoStream<WsStreamIo, Vec<u8>> {
-        IoStream::new(WsStreamIo::new(self))
     }
 }
 
@@ -216,7 +200,7 @@ impl Drop for WsStream {
 }
 
 impl Stream for WsStream {
-    type Item = Result<WsMessage, WsErr>;
+    type Item = Result<WsMessage, Error>;
 
     // Using `Result<T, E>` to keep same format of `tungstenite` code
 
@@ -243,7 +227,7 @@ impl Stream for WsStream {
 }
 
 impl Sink<WsMessage> for WsStream {
-    type Error = WsErr;
+    type Error = Error;
 
     // Web API does not really seem to let us check for readiness, other than the connection state.
     //
@@ -255,7 +239,7 @@ impl Sink<WsMessage> for WsStream {
                 Poll::Pending
             }
             WsState::Open => Ok(()).into(),
-            _ => Err(WsErr::ConnectionNotOpen).into(),
+            _ => Err(Error::ConnectionNotOpen).into(),
         }
     }
 
@@ -266,25 +250,25 @@ impl Sink<WsMessage> for WsStream {
                 // - unpaired surrogates in UTF (we shouldn't get those in rust strings)
                 // - connection is already closed.
                 //
-                // So if this returns an error, we will return ConnectionNotOpen. In principle
+                // So if this returns an error, we will return ConnectionNotOpen. In principle,
                 // we just checked that it's open, but this guarantees correctness.
                 //
                 match item {
                     WsMessage::Binary(d) => self
                         .ws
                         .send_with_u8_array(&d)
-                        .map_err(|_| WsErr::ConnectionNotOpen)?,
+                        .map_err(|_| Error::ConnectionNotOpen)?,
                     WsMessage::Text(s) => self
                         .ws
                         .send_with_str(&s)
-                        .map_err(|_| WsErr::ConnectionNotOpen)?,
+                        .map_err(|_| Error::ConnectionNotOpen)?,
                 }
 
                 Ok(())
             }
 
             // Connecting, Closing or Closed
-            _ => Err(WsErr::ConnectionNotOpen),
+            _ => Err(Error::ConnectionNotOpen),
         }
     }
 
@@ -322,7 +306,7 @@ impl Sink<WsMessage> for WsStream {
                         rx.next().await;
                     };
 
-                    self.closer = Some(SendWrapper::new(closer.boxed()));
+                    self.closer = Some(closer.boxed());
                 }
 
                 if let Some(c) = self.closer.as_mut() {

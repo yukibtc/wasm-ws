@@ -8,14 +8,13 @@ use js_sys::{ArrayBuffer, Uint8Array};
 use wasm_bindgen::JsCast;
 use web_sys::{Blob, MessageEvent};
 
-use crate::WsErr;
+use crate::Error;
 
 /// Represents a WebSocket Message, after converting from JavaScript type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WsMessage {
     /// The data of the message is a string.
     Text(String),
-
     /// The message contains binary data.
     Binary(Vec<u8>),
 }
@@ -47,7 +46,7 @@ impl WsMessage {
 
     /// Attempt to get a &str from the WebSocket message,
     /// this will try to convert binary data to utf8.
-    pub fn to_text(&self) -> Result<&str, WsErr> {
+    pub fn to_text(&self) -> Result<&str, Error> {
         match self {
             Self::Text(string) => Ok(string),
             Self::Binary(data) => Ok(str::from_utf8(data)?),
@@ -59,18 +58,13 @@ impl WsMessage {
 /// will only work if the connection is set to use the binary type ArrayBuffer.
 /// On binary type Blob, this will panic.
 impl TryFrom<MessageEvent> for WsMessage {
-    type Error = WsErr;
+    type Error = Error;
 
     fn try_from(evt: MessageEvent) -> Result<Self, Self::Error> {
         match evt.data() {
-            d if d.is_instance_of::<ArrayBuffer>() => {
-                let buffy = Uint8Array::new(d.unchecked_ref());
-                let mut v = vec![0; buffy.length() as usize];
-
-                buffy.copy_to(&mut v); // FIXME: get rid of this copy
-
-                Ok(WsMessage::Binary(v))
-            }
+            d if d.is_instance_of::<ArrayBuffer>() => Ok(WsMessage::Binary(
+                Uint8Array::new(d.unchecked_ref()).to_vec(),
+            )),
 
             // We don't allow invalid encodings. In principle if needed,
             // we could add a variant to WsMessage with a CString or an OsString
@@ -81,15 +75,15 @@ impl TryFrom<MessageEvent> for WsMessage {
             // message.
             d if d.is_string() => match d.as_string() {
                 Some(text) => Ok(WsMessage::Text(text)),
-                None => Err(WsErr::InvalidEncoding),
+                None => Err(Error::InvalidEncoding),
             },
 
             // We have set the binary mode to array buffer (WsMeta::connect), so normally this shouldn't happen.
             // That is as long as this is used within the context of the WsMeta constructor.
-            d if d.is_instance_of::<Blob>() => Err(WsErr::CantDecodeBlob),
+            d if d.is_instance_of::<Blob>() => Err(Error::CantDecodeBlob),
 
             // should never happen.
-            _ => Err(WsErr::UnknownDataType),
+            _ => Err(Error::UnknownDataType),
         }
     }
 }
@@ -98,7 +92,7 @@ impl From<WsMessage> for Vec<u8> {
     fn from(msg: WsMessage) -> Self {
         match msg {
             WsMessage::Text(string) => string.into(),
-            WsMessage::Binary(vec) => vec,
+            WsMessage::Binary(data) => data,
         }
     }
 }
@@ -118,8 +112,8 @@ impl From<String> for WsMessage {
 impl AsRef<[u8]> for WsMessage {
     fn as_ref(&self) -> &[u8] {
         match self {
-            WsMessage::Text(string) => string.as_ref(),
-            WsMessage::Binary(vec) => vec.as_ref(),
+            Self::Text(string) => string.as_ref(),
+            Self::Binary(data) => data.as_ref(),
         }
     }
 }
